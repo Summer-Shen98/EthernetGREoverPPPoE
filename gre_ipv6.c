@@ -89,14 +89,13 @@ static unsigned ip_hash(const char *ip) {
     return h & (HASH_SIZE - 1);
 }
 
-// 把 IPv6 地址（可能含冒号）转为文件名安全的形式（替换 ':' -> '_'）
 static void sanitize_for_filename(const char *src, char *dst, size_t dstlen) {
     if (!src || !dst) return;
     size_t i;
     for (i = 0; i < dstlen - 1 && src[i]; ++i) {
         char c = src[i];
         if (c == ':') dst[i] = '_';
-        else if (c == '%') dst[i] = '_'; // 有时带 scope id 如 %eth0
+        else if (c == '%') dst[i] = '_'; 
         else dst[i] = c;
     }
     dst[i] = '\0';
@@ -111,7 +110,7 @@ static int lock_ip(const char *ip) {
     int fd = open(path, O_CREAT | O_RDWR, 0644);
     if (fd < 0) return -1;
     if (flock(fd, LOCK_EX) < 0) { close(fd); return -1; }
-    return fd; // 成功持有锁；调用者负责 close(fd) 释放
+    return fd;
 }
 
 
