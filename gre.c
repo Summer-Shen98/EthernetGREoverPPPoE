@@ -24,21 +24,18 @@
 
 #define GRE_PROTOCOL 47
 #define INET4_STRLEN 16
-#define HASH_SIZE 4096             // 大一点，降低冲突
-#define DEFAULT_TIMEOUT_SEC 50     // 超时删除
+#define HASH_SIZE 4096
+#define DEFAULT_TIMEOUT_SEC 50 
 #define DEFAULT_QUEUE_ID 0
 #define LOG_PREFIX "[gre-worker] "
 
-// --------- 全局状态 ----------
 static volatile int running = 1;
 static int queue_id = DEFAULT_QUEUE_ID;
 static int timeout_sec = DEFAULT_TIMEOUT_SEC;
 static const char *script_path = "./eogre_v4_pppoe.sh";
 static const char *wan_dev = "eth0";
 static const char *brgre_iface = "brEoGREPPPoE";
-static const char *lock_dir = "/run/eogrelocks"; // 跨进程锁目录
-
-// 每进程的 last_seen 表
+static const char *lock_dir = "/run/eogrelocks"; 
 typedef struct IpEntry {
     char ip[INET4_STRLEN];
     time_t last_seen;
@@ -47,7 +44,6 @@ typedef struct IpEntry {
 static IpEntry *ip_table[HASH_SIZE];
 static pthread_mutex_t ip_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// --------- 简单工具 ----------
 static void logi(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -88,19 +84,16 @@ static unsigned ip_hash(const char *ip) {
     return h & (HASH_SIZE - 1);
 }
 
-// 为单个 IP 获取跨进程互斥锁（避免多进程重复建/删）
 static int lock_ip(const char *ip) {
     char path[256];
     snprintf(path, sizeof(path), "%s/%s.lock", lock_dir, ip);
     int fd = open(path, O_CREAT | O_RDWR, 0644);
     if (fd < 0) return -1;
     if (flock(fd, LOCK_EX) < 0) { close(fd); return -1; }
-    return fd; // 成功持有锁；调用者负责 close(fd) 释放
+    return fd;
 }
 
-// 调外部脚本：gre int/del <ip> ；或其它单参数动作
 static int run_script_gre(const char *action, const char *ip,const char *brgre_iface, const char *wan_dev) {
-    // 带锁防重
     int lfd = -1;
     if (ip) {
         lfd = lock_ip(ip);
@@ -139,7 +132,6 @@ static int run_script_gre(const char *action, const char *ip,const char *brgre_i
     return -1;
 }
 
-// 仅在需要时创建 lock 目录
 static void ensure_lock_dir(void) {
     struct stat st;
     if (stat(lock_dir, &st) == 0) {
@@ -155,7 +147,6 @@ static void ensure_lock_dir(void) {
     }
 }
 
-// --------- IP 表操作 ----------
 static bool ip_exists_and_touch(const char *ip) {
     unsigned h = ip_hash(ip);
     time_t now = time(NULL);
@@ -220,7 +211,6 @@ static void *timeout_thread(void *arg) {
     return NULL;
 }
 
-// --------- NFQUEUE 回调 ----------
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
               struct nfq_data *nfa, void *data) {
     (void)nfmsg; (void)data;
@@ -246,16 +236,13 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 }
 
-// --------- 退出信号 ----------
 static void on_sigint(int sig) {
     (void)sig;
     running = 0;
 }
 
-// --------- 主循环 ----------
 static void nfqueue_loop(int fd, struct nfq_handle *h) {
     struct pollfd pfd = { .fd = fd, .events = POLLIN };
-    // 尝试加大接收缓冲
     int rcvbuf = 64 * 1024 * 1024;
     (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
@@ -286,15 +273,14 @@ static void usage(const char *prog) {
 }
 
 int main(int argc, char **argv) {
-    // 参数
     int opt;
         while ((opt = getopt(argc, argv, "q:t:s:b:w:h")) != -1) {
             switch (opt) {
                 case 'q': queue_id = atoi(optarg); break;
                 case 't': timeout_sec = atoi(optarg); break;
                 case 's': script_path = optarg; break;
-                case 'b': brgre_iface = optarg; break;   // ✅ 新增
-                case 'w': wan_dev = optarg; break;       // ✅ 新增
+                case 'b': brgre_iface = optarg; break; 
+                case 'w': wan_dev = optarg; break; 
                 case 'h': default: usage(argv[0]); return (opt=='h') ? 0 : 1;
             }
     }
@@ -302,16 +288,12 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_sigint);
     signal(SIGTERM, on_sigint);
 
-    // 启动超时线程
     pthread_t tid;
     pthread_create(&tid, NULL, timeout_thread, NULL);
 
-    // NFQUEUE
     struct nfq_handle *h = nfq_open();
     if (!h) { loge("nfq_open failed"); return 2; }
 
-    // 只负责自己队列，不在这里 unbind/bind PF_GLOBAL，以免多进程竞争
-    // 安全起见仍然 bind AF_INET（不调用 unbind，避免和其他队列冲突）
     if (nfq_bind_pf(h, AF_INET) < 0) {
         loge("nfq_bind_pf failed: %s", strerror(errno));
         nfq_close(h);
@@ -325,7 +307,6 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    // 只需要 IP 头即可，尽量减少拷贝（也可用 NFQNL_COPY_META）
     if (nfq_set_mode(qh, NFQNL_COPY_PACKET, sizeof(struct iphdr)) < 0) {
         loge("nfq_set_mode failed");
         nfq_destroy_queue(qh);
@@ -333,7 +314,6 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    // 避免内核在进程崩溃时阻塞
     nfq_set_queue_maxlen(qh, 8192);
 
     int fd = nfq_fd(h);
